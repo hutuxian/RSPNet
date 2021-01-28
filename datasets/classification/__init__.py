@@ -139,11 +139,12 @@ class DataLoaderFactoryV3:
         dl = DataLoader(
             video_dataset,
             batch_size=batch_size,
-            num_workers=self.cfg.get_int('num_workers'),
+            #num_workers=self.cfg.get_int('num_workers'),
+            num_workers=0,
             sampler=sampler,
             drop_last=(split == 'train'),
             collate_fn=identity,  # We will deal with collation on main thread.
-            multiprocessing_context=mp.get_context('fork'),
+            # multiprocessing_context=mp.get_context('fork'),
         )
 
         return MainProcessCollateWrapper(dl, gpu_collate_fn)
