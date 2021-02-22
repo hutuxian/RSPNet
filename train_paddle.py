@@ -12,18 +12,20 @@ from framework import utils
 
 from datasets.classification import DataLoaderFactoryV3
 from framework.config import get_config, save_config
+from paddle.distributed import fleet
 
 
 class Engine:
-    def __init__(self, cfg, local_rank):
+    def __init__(self, args, cfg, local_rank):
         self.epochs = cfg.get_int('num_epochs')
+        self.args = args
         self.current_epoch = 0
         # self.batch_size = self.args.train_batch_size
         self.batch_size = cfg.get_int('batch_size')
         self.batch_size = 64
 
+        fleet.init(is_collective=True)
         self.model = model.MoCoWrapper(cfg).build_moco_diffloss()
-        print("self.model: ", self.model )
 
         self.data_loader_factory = DataLoaderFactoryV3(cfg)
         self.train_loader = self.data_loader_factory.build(vid=True)
@@ -44,6 +46,9 @@ class Engine:
             weight_decay=cfg.get_float('optimizer.weight_decay'),
             use_nesterov=cfg.get_bool('optimizer.nesterov'),
         )
+        self.optimizer = fleet.distributed_optimizer(self.optimizer)
+        self.model = fleet.distributed_model(self.model)
+
     def train_epoch(self):
         loop = 10
         num_iters = len(self.train_loader)
@@ -53,13 +58,10 @@ class Engine:
         clip_k = paddle.randn([self.batch_size, 3, 16, 112, 112])
         # for i in range(loop):
         for i, (clip_q, clip_k) in enumerate(self.train_loader):
-        # for i, ((clip_q, clip_k)) in enumerate(self.train_loader):
             output, target, ranking_logits, ranking_target = self.model(clip_q, clip_k)
             loss, loss_A, loss_M = self.criterion(output, target, ranking_logits, ranking_target)
 
-            # if not self.args.validate:
-            if True:
-                print("begin optimizer")
+            if not self.args.validate:
                 loss.backward()
                 self.optimizer.step()
                 self.model.clear_gradients()
@@ -91,6 +93,7 @@ class Engine:
             
     def run(self):
         while self.current_epoch < self.epochs:
+            print("train epoch: %d" % (self.current_epoch))
             self.train_epoch()
             self.current_epoch += 1
 
@@ -107,9 +110,8 @@ def main(local_rank = 0):
     args.parser = None
     cfg = get_config(args)
 
-
     print('Local Rank:', local_rank)
-    engine = Engine(cfg, local_rank=local_rank)
+    engine = Engine(args, cfg, local_rank=local_rank)
     engine.run()
 
 

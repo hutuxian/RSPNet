@@ -124,7 +124,6 @@ class MultiTaskWrapper(nn.Layer):
 
     def forward(self, x):
         feat = self.encoder.get_feature(x)
-        print("feat: ", feat)
 
         if self.finetune:
             x3 = self.avg_pool(feat)
