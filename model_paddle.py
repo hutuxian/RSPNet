@@ -305,6 +305,7 @@ def concat_all_gather(tensor):
 
     tensors_gather = [paddle.ones_like(tensor)
         for _ in range(paddle.distributed.get_world_size())]
+    tensors_gather = []
     paddle.distributed.all_gather(tensors_gather, tensor)
 
     output = paddle.concat(tensors_gather, axis=0)
