@@ -19,6 +19,9 @@ def get_model_class(arch):
     elif arch == 'resnet50':
         from .resnet import resnet50
         model_class = resnet50
+    elif arch == 's3dg':
+        from .s3dg import S3D_G
+        model_class = S3D_G
     else:
         raise ValueError('Unknown model architecture "{%s}"' % (arch))
 
