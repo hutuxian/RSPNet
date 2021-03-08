@@ -6,7 +6,8 @@ import decord
 import numpy as np
 import torch
 from datasets.transforms_video.transforms_temporal import Resample
-from torch.utils.data import Dataset
+# from torch.utils.data import Dataset
+from paddle.io import Dataset
 
 logger = logging.getLogger(__name__)
 

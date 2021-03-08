@@ -1,0 +1,690 @@
+grep: warning: GREP_OPTIONS is deprecated; please use an alias or script
+argument type:  <class 'str'>
+Working tree is dirty. Patch:
+diff --git a/config/pretrain/moco-train-base.jsonnet b/config/pretrain/moco-train-base.jsonnet
+index 252faac..fb9301f 100644
+--- a/config/pretrain/moco-train-base.jsonnet
++++ b/config/pretrain/moco-train-base.jsonnet
+@@ -10,7 +10,7 @@ local loss_lambda = import "../optimizer/loss_lambda.libsonnet";
+         arch: $.arch,
+     },
+ 
+-    dataset: kinetics100, // or kinetics100
++    dataset: kinetics100, // or kinetics400
+ 
+     batch_size: 64,
+     num_workers: 4,
+diff --git a/config/pretrain/s3dg.jsonnet b/config/pretrain/s3dg.jsonnet
+index bf6e94a..f93c786 100644
+--- a/config/pretrain/s3dg.jsonnet
++++ b/config/pretrain/s3dg.jsonnet
+@@ -1,7 +1,7 @@
+ local base = import "moco-train-base.jsonnet";
+ 
+ base {
+-    batch_size: 64,
++    batch_size: 32,
+     num_workers: 4,
+ 
+     arch: 's3dg',
+diff --git a/datasets/classification/video.py b/datasets/classification/video.py
+index fdd79bf..c61380a 100644
+--- a/datasets/classification/video.py
++++ b/datasets/classification/video.py
+@@ -73,6 +73,7 @@ class VideoDataset(Dataset):
+         clip_frame_indices_list = [self.temporal_transform(frame_indices) for _ in range(self.num_clips_per_sample)]
+         # Fetch all frames in one `vr.get_batch` call
+         clip_frame_indices = np.concatenate(clip_frame_indices_list)  # [a1, a2, ..., an, b1, b2, ...,bn]
++        decord.bridge.set_bridge('torch')
+         clips: torch.Tensor = vr.get_batch(clip_frame_indices)  # [N*T, H, W, C]
+         clip_list = clips.chunk(len(clip_frame_indices_list), dim=0)  # List[Tensor[T, H, W, C]]
+ 
+diff --git a/datasets/transforms_video/transforms_tensor.py b/datasets/transforms_video/transforms_tensor.py
+index d008074..6a5de4b 100644
+--- a/datasets/transforms_video/transforms_tensor.py
++++ b/datasets/transforms_video/transforms_tensor.py
+@@ -223,7 +223,9 @@ class SequentialGPUCollateFn:
+ 
+         batch_size = len(clips)
+         num_clips = len(clips[0])
++        
+         clip_list: List[List[Optional[Tensor]]] = [[None for _ in range(batch_size)] for _ in range(num_clips)]
++        print("=========AAAAAAAAAA===========")
+         for batch_index, clip in enumerate(clips):  # batch of clip0, clip1
+             for clip_index, clip_tensor in enumerate(clip):
+                 clip_tensor = clip_tensor.cuda(device=self.device, non_blocking=True)
+diff --git a/framework/arguments.py b/framework/arguments.py
+index 68f2955..883187a 100644
+--- a/framework/arguments.py
++++ b/framework/arguments.py
+@@ -77,8 +77,13 @@ class Args(TypedArgs):
+         if self.experiment_dir is not None:
+             self.experiment_dir.mkdir(parents=True, exist_ok=True)
+             if not self.ask_for_replacing_older_dir(self.run_dir):
+-                raise EnvironmentError(f'Run dir "{self.run_dir}" exists')
+-            self.run_dir.mkdir(parents=True, exist_ok=False)
++                print(f'Run dir "{self.run_dir}" exists')
++                #raise EnvironmentError(f'Run dir "{self.run_dir}" exists')
++            else:
++                try:
++                    self.run_dir.mkdir(parents=True, exist_ok=False)
++                except Exception as e:
++                    print(f'Run dir "{self.run_dir}" exists#################')
+ 
+     def make_experiment_dir(self):
+         if not self.ask_for_replacing_older_dir(self.experiment_dir):
+@@ -92,9 +97,10 @@ class Args(TypedArgs):
+         print(
+             f'File exists: {dir_to_be_replaced}\nDo you want to remove it and create a new one?'
+         )
+-        choice = input('Remove older directory? [y]es/[n]o: ')
+-
+-        if choice in ['y', 'yes']:
+-            shutil.rmtree(dir_to_be_replaced)
+-            return True
+-        return False
++        #choice = input('Remove older directory? [y]es/[n]o: ')
++        shutil.rmtree(dir_to_be_replaced)
++        return True
++        #if choice in ['y', 'yes']:
++        #    shutil.rmtree(dir_to_be_replaced)
++        #    return True
++        #return False
+diff --git a/model_paddle.py b/model_paddle.py
+index cf7c6a9..338b70f 100644
+--- a/model_paddle.py
++++ b/model_paddle.py
+@@ -189,15 +189,15 @@ class MoCoDiffLossTwoFc(nn.Layer):
+     @paddle.no_grad()
+     def _forward_encoder_k(self, im_k):
+         # shuffle for making use of BN
+-        im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
++        #im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
+ 
+         k_A, k_M = self.encoder_k(im_k)  # keys: NxC
+         # k_A = self.encoder_q(im_k)
+         # k_M = self.encoder_q(im_k)
+ 
+         # undo shuffle
+-        k_A = self._batch_unshuffle_ddp(k_A, idx_unshuffle)
+-        k_M = self._batch_unshuffle_ddp(k_M, idx_unshuffle)
++        #k_A = self._batch_unshuffle_ddp(k_A, idx_unshuffle)
++        #k_M = self._batch_unshuffle_ddp(k_M, idx_unshuffle)
+ 
+         return k_A, k_M
+ 
+@@ -305,6 +305,7 @@ def concat_all_gather(tensor):
+ 
+     tensors_gather = [paddle.ones_like(tensor)
+         for _ in range(paddle.distributed.get_world_size())]
++    tensors_gather=[]
+     paddle.distributed.all_gather(tensors_gather, tensor)
+ 
+     output = paddle.concat(tensors_gather, axis=0)
+diff --git a/models_paddle/__init__.py b/models_paddle/__init__.py
+index f9ac301..fa0187a 100644
+--- a/models_paddle/__init__.py
++++ b/models_paddle/__init__.py
+@@ -19,6 +19,9 @@ def get_model_class(arch):
+     elif arch == 'resnet50':
+         from .resnet import resnet50
+         model_class = resnet50
++    elif arch == 's3dg':
++        from .s3dg import S3D_G
++        model_class = S3D_G
+     else:
+         raise ValueError('Unknown model architecture "{%s}"' % (arch))
+ 
+diff --git a/pretrain.py b/pretrain.py
+index f9feda9..0696980 100644
+--- a/pretrain.py
++++ b/pretrain.py
+@@ -24,7 +24,7 @@ from framework.utils.checkpoint import CheckpointManager
+ from moco import ModelFactory
+ from moco.builder_diffspeed_diffloss import Loss
+ from utils.moco import replace_moco_k_in_config
+-
++import logging
+ logger = logging.getLogger(__name__)
+ 
+ 
+@@ -51,7 +51,14 @@ class Engine:
+             A=self.loss_lambda.get_float('A'),
+             M=self.loss_lambda.get_float('M')
+         )
+-
++        
++        #whc add a logger
++        self.logger=logging.getLogger()
++        self.logger.setLevel(logging.INFO)
++        fh=logging.FileHandler("test_log/torch_res.log",mode="w")
++        fh.setLevel(logging.INFO)
++        self.logger.addHandler(fh)
++        
+         self.train_loader = self.data_loader_factory.build(vid=True, device=self.device)
+ 
+         self.learning_rate = self.cfg.get_float('optimizer.lr')
+@@ -173,7 +180,9 @@ class Engine:
+             batch_size = len(clip_q)
+             self.top1_meter_A_n.update(acc1_A_n, batch_size)
+             self.top5_meter_A_n.update(acc5_A_n, batch_size)
+-
++            
++            #whc
++            self.logger.info("whc {} {} {} {} {} {} {} {}".format(self.current_epoch,i,loss.detach().numpy()[0], loss_A.detach().numpy()[0], loss_M.detach().numpy()[0],acc1_A.detach().numpy()[0], acc5_A.detach().numpy()[0], acc1_M.detach().numpy()[0]))
+             if i > 0 and i % self.log_interval == 0:
+                 # Do logging as late as possible. this will force CUDA sync.
+                 # Log numbers from last iteration, just before update
+diff --git a/train_paddle.py b/train_paddle.py
+index 142f2b7..acaecb3 100644
+--- a/train_paddle.py
++++ b/train_paddle.py
+@@ -6,14 +6,16 @@ import paddle.distributed.spawn as spawn
+ import numpy as np
+ import model_paddle as model
+ import models.resnet as resnet
+-
++import os
+ from arguments import Args
+ from framework import utils
+-
+ from datasets.classification import DataLoaderFactoryV3
+ from framework.config import get_config, save_config
++import paddle.distributed.fleet.base.role_maker as role_maker
++#from framework.utils.whc_checkpoint import CheckpointManager
+ from paddle.distributed import fleet
+-
++#whc
++import logging
+ 
+ class Engine:
+     def __init__(self, args, cfg, local_rank):
+@@ -22,9 +24,28 @@ class Engine:
+         self.current_epoch = 0
+         # self.batch_size = self.args.train_batch_size
+         self.batch_size = cfg.get_int('batch_size')
+-        self.batch_size = 64
+-
++        #self.batch_size = 64
++        self.local_rank=local_rank
++        self.best_loss = float('inf')
++        self.arch = cfg.get_string('arch')
++        role = role_maker.PaddleCloudRoleMaker(is_collective=True)
+         fleet.init(is_collective=True)
++        
++        if fleet.worker_index()==0:
++            #whc add a logger
++            self.logger=logging.getLogger()
++            self.logger.setLevel(logging.INFO)
++            fh=logging.FileHandler("test_log/paddle_res.log",mode="w")
++            fh.setLevel(logging.INFO)
++            self.logger.addHandler(fh)
++            #self.checkpoint = CheckpointManager(
++            #    args.experiment_dir,
++            #    keep_interval=cfg.get_int('checkpoint_interval')
++            #)
++        else:
++            self.checkpoint = None
++
++        #fleet.init(is_collective=True)
+         self.model = model.MoCoWrapper(cfg).build_moco_diffloss()
+ 
+         self.data_loader_factory = DataLoaderFactoryV3(cfg)
+@@ -37,10 +58,17 @@ class Engine:
+             A=self.loss_lambda.get_float('A'),
+             M=self.loss_lambda.get_float('M')
+         )
+-
++        print("####################world_size=",self.args.world_size)
++        if not self.args.no_scale_lr:
++            self.learning_rate = utils.environment.scale_learning_rate(
++                self.learning_rate,
++                self.args.world_size if self.args.world_size==8 else 8,
++                self.batch_size,
++            ) 
++        self.scheduler = paddle.optimizer.lr.CosineAnnealingDecay(learning_rate=self.learning_rate,T_max=self.epochs,eta_min=self.learning_rate/1000)
+         self.optimizer = paddle.optimizer.Momentum(
+             parameters=self.model.parameters(),
+-            learning_rate=self.learning_rate,
++            learning_rate=self.scheduler,
+             momentum=cfg.get_float('optimizer.momentum'),
+             # dampening=cfg.get_float('optimizer.dampening'),
+             weight_decay=cfg.get_float('optimizer.weight_decay'),
+@@ -57,6 +85,8 @@ class Engine:
+         clip_q = paddle.randn([self.batch_size, 3, 16, 112, 112])
+         clip_k = paddle.randn([self.batch_size, 3, 16, 112, 112])
+         # for i in range(loop):
++        avg_loss=0
++        nn=0
+         for i, (clip_q, clip_k) in enumerate(self.train_loader):
+             output, target, ranking_logits, ranking_target = self.model(clip_q, clip_k)
+             loss, loss_A, loss_M = self.criterion(output, target, ranking_logits, ranking_target)
+@@ -76,10 +106,29 @@ class Engine:
+             # acc1_A_n = accuracy(output[1], target, k=1)
+             # acc5_A_n = accuracy(output[1], target, k=5)
+ 
++            #whc get the avg_loss
++            avg_loss += loss.detach().numpy()[0]
++            nn += 1
++
+             # if i > 0 and i % self.log_interval == 0:
+             if True:
+                 print("loss: %f, loss_A: %f, loss_M: %f" % (loss, loss_A, loss_M))
+                 print("acc1_A: %f, acc5_A: %f, acc1_M: %f" % (acc1_A, acc5_A, acc1_M))
++                if fleet.worker_index()==0:
++                    self.logger.info("whc {} {} {} {} {} {} {} {}".format(self.current_epoch,i,loss.detach().numpy()[0], loss_A.detach().numpy()[0], loss_M.detach().numpy()[0],acc1_A.detach().numpy()[0], acc5_A.detach().numpy()[0], acc1_M.detach().numpy()[0]))
++
++        if fleet.worker_index()== 0:
++            avg_loss = avg_loss / nn
++            is_best = avg_loss < self.best_loss
++            self.best_loss = min(avg_loss,self.best_loss)
++            if is_best:
++                best_param=os.path.join(str(self.args.experiment_dir),"best_mode.pdparams")
++                best_optim=os.path.join(str(self.args.experiment_dir),"best_optim.pdparams")
++                best_sche=os.path.join(str(self.args.experiment_dir),"best_sche.pdparams")
++                paddle.save(self.model.state_dict(),best_param)
++                paddle.save(self.optimizer.state_dict(),best_optim)
++                paddle.save(self.scheduler.state_dict(),best_sche) 
++ 
+                 # Do logging as late as possible. this will force CUDA sync.
+                 # Log numbers from last iteration, just before update
+                 # logger.info(
+@@ -89,12 +138,14 @@ class Engine:
+                 #     f'{self.top1_meter_A_n}\t{self.top5_meter_A_n}'
+                 # )
+ 
+-
+             
+     def run(self):
+         while self.current_epoch < self.epochs:
+             print("train epoch: %d" % (self.current_epoch))
+             self.train_epoch()
++            if fleet.worker_index()==0:
++                self.logger.info("epoch {} {}".format(self.current_epoch,self.scheduler.get_lr()))
++            self.scheduler.step()
+             self.current_epoch += 1
+ 
+ 
+
+Local Rank: 0
+I0305 10:49:22.880129 26841 nccl_context.cc:189] init nccl context nranks: 8 local rank: 7 gpu id: 7 ring id: 0
+W0305 10:49:25.367197 26841 device_context.cc:362] Please NOTE: device: 7, GPU Compute Capability: 7.0, Driver API Version: 11.0, Runtime API Version: 10.0
+W0305 10:49:25.371701 26841 device_context.cc:372] device: 7, cuDNN Version: 7.6.
+backbone:  s3dg
+Found fc: fc with in_features: 1024
+Found fc: fc with in_features: 1024
+####################world_size= 8
+adjust lr according to the number of GPU and batch size：0.05 -> 0.2
+train epoch: 0
+=========AAAAAAAAAA===========
+/usr/local/python378-gcc540/lib/python3.7/site-packages/paddle/nn/layer/norm.py:636: UserWarning: When training, we now always track global mean and variance.
+  "When training, we now always track global mean and variance.")
+=========AAAAAAAAAA===========
+grep: warning: GREP_OPTIONS is deprecated; please use an alias or script
+argument type:  <class 'str'>
+Working tree is dirty. Patch:
+diff --git a/config/pretrain/moco-train-base.jsonnet b/config/pretrain/moco-train-base.jsonnet
+index 252faac..fb9301f 100644
+--- a/config/pretrain/moco-train-base.jsonnet
++++ b/config/pretrain/moco-train-base.jsonnet
+@@ -10,7 +10,7 @@ local loss_lambda = import "../optimizer/loss_lambda.libsonnet";
+         arch: $.arch,
+     },
+ 
+-    dataset: kinetics100, // or kinetics100
++    dataset: kinetics100, // or kinetics400
+ 
+     batch_size: 64,
+     num_workers: 4,
+diff --git a/config/pretrain/s3dg.jsonnet b/config/pretrain/s3dg.jsonnet
+index bf6e94a..71a0a9f 100644
+--- a/config/pretrain/s3dg.jsonnet
++++ b/config/pretrain/s3dg.jsonnet
+@@ -1,7 +1,7 @@
+ local base = import "moco-train-base.jsonnet";
+ 
+ base {
+-    batch_size: 64,
++    batch_size: 2,
+     num_workers: 4,
+ 
+     arch: 's3dg',
+diff --git a/datasets/classification/video.py b/datasets/classification/video.py
+index fdd79bf..c61380a 100644
+--- a/datasets/classification/video.py
++++ b/datasets/classification/video.py
+@@ -73,6 +73,7 @@ class VideoDataset(Dataset):
+         clip_frame_indices_list = [self.temporal_transform(frame_indices) for _ in range(self.num_clips_per_sample)]
+         # Fetch all frames in one `vr.get_batch` call
+         clip_frame_indices = np.concatenate(clip_frame_indices_list)  # [a1, a2, ..., an, b1, b2, ...,bn]
++        decord.bridge.set_bridge('torch')
+         clips: torch.Tensor = vr.get_batch(clip_frame_indices)  # [N*T, H, W, C]
+         clip_list = clips.chunk(len(clip_frame_indices_list), dim=0)  # List[Tensor[T, H, W, C]]
+ 
+diff --git a/datasets/transforms_video/transforms_tensor.py b/datasets/transforms_video/transforms_tensor.py
+index d008074..6a5de4b 100644
+--- a/datasets/transforms_video/transforms_tensor.py
++++ b/datasets/transforms_video/transforms_tensor.py
+@@ -223,7 +223,9 @@ class SequentialGPUCollateFn:
+ 
+         batch_size = len(clips)
+         num_clips = len(clips[0])
++        
+         clip_list: List[List[Optional[Tensor]]] = [[None for _ in range(batch_size)] for _ in range(num_clips)]
++        print("=========AAAAAAAAAA===========")
+         for batch_index, clip in enumerate(clips):  # batch of clip0, clip1
+             for clip_index, clip_tensor in enumerate(clip):
+                 clip_tensor = clip_tensor.cuda(device=self.device, non_blocking=True)
+diff --git a/framework/arguments.py b/framework/arguments.py
+index 68f2955..883187a 100644
+--- a/framework/arguments.py
++++ b/framework/arguments.py
+@@ -77,8 +77,13 @@ class Args(TypedArgs):
+         if self.experiment_dir is not None:
+             self.experiment_dir.mkdir(parents=True, exist_ok=True)
+             if not self.ask_for_replacing_older_dir(self.run_dir):
+-                raise EnvironmentError(f'Run dir "{self.run_dir}" exists')
+-            self.run_dir.mkdir(parents=True, exist_ok=False)
++                print(f'Run dir "{self.run_dir}" exists')
++                #raise EnvironmentError(f'Run dir "{self.run_dir}" exists')
++            else:
++                try:
++                    self.run_dir.mkdir(parents=True, exist_ok=False)
++                except Exception as e:
++                    print(f'Run dir "{self.run_dir}" exists#################')
+ 
+     def make_experiment_dir(self):
+         if not self.ask_for_replacing_older_dir(self.experiment_dir):
+@@ -92,9 +97,10 @@ class Args(TypedArgs):
+         print(
+             f'File exists: {dir_to_be_replaced}\nDo you want to remove it and create a new one?'
+         )
+-        choice = input('Remove older directory? [y]es/[n]o: ')
+-
+-        if choice in ['y', 'yes']:
+-            shutil.rmtree(dir_to_be_replaced)
+-            return True
+-        return False
++        #choice = input('Remove older directory? [y]es/[n]o: ')
++        shutil.rmtree(dir_to_be_replaced)
++        return True
++        #if choice in ['y', 'yes']:
++        #    shutil.rmtree(dir_to_be_replaced)
++        #    return True
++        #return False
+diff --git a/model_paddle.py b/model_paddle.py
+index cf7c6a9..338b70f 100644
+--- a/model_paddle.py
++++ b/model_paddle.py
+@@ -189,15 +189,15 @@ class MoCoDiffLossTwoFc(nn.Layer):
+     @paddle.no_grad()
+     def _forward_encoder_k(self, im_k):
+         # shuffle for making use of BN
+-        im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
++        #im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
+ 
+         k_A, k_M = self.encoder_k(im_k)  # keys: NxC
+         # k_A = self.encoder_q(im_k)
+         # k_M = self.encoder_q(im_k)
+ 
+         # undo shuffle
+-        k_A = self._batch_unshuffle_ddp(k_A, idx_unshuffle)
+-        k_M = self._batch_unshuffle_ddp(k_M, idx_unshuffle)
++        #k_A = self._batch_unshuffle_ddp(k_A, idx_unshuffle)
++        #k_M = self._batch_unshuffle_ddp(k_M, idx_unshuffle)
+ 
+         return k_A, k_M
+ 
+@@ -305,6 +305,7 @@ def concat_all_gather(tensor):
+ 
+     tensors_gather = [paddle.ones_like(tensor)
+         for _ in range(paddle.distributed.get_world_size())]
++    tensors_gather=[]
+     paddle.distributed.all_gather(tensors_gather, tensor)
+ 
+     output = paddle.concat(tensors_gather, axis=0)
+diff --git a/models_paddle/__init__.py b/models_paddle/__init__.py
+index f9ac301..fa0187a 100644
+--- a/models_paddle/__init__.py
++++ b/models_paddle/__init__.py
+@@ -19,6 +19,9 @@ def get_model_class(arch):
+     elif arch == 'resnet50':
+         from .resnet import resnet50
+         model_class = resnet50
++    elif arch == 's3dg':
++        from .s3dg import S3D_G
++        model_class = S3D_G
+     else:
+         raise ValueError('Unknown model architecture "{%s}"' % (arch))
+ 
+diff --git a/pretrain.py b/pretrain.py
+index f9feda9..0696980 100644
+--- a/pretrain.py
++++ b/pretrain.py
+@@ -24,7 +24,7 @@ from framework.utils.checkpoint import CheckpointManager
+ from moco import ModelFactory
+ from moco.builder_diffspeed_diffloss import Loss
+ from utils.moco import replace_moco_k_in_config
+-
++import logging
+ logger = logging.getLogger(__name__)
+ 
+ 
+@@ -51,7 +51,14 @@ class Engine:
+             A=self.loss_lambda.get_float('A'),
+             M=self.loss_lambda.get_float('M')
+         )
+-
++        
++        #whc add a logger
++        self.logger=logging.getLogger()
++        self.logger.setLevel(logging.INFO)
++        fh=logging.FileHandler("test_log/torch_res.log",mode="w")
++        fh.setLevel(logging.INFO)
++        self.logger.addHandler(fh)
++        
+         self.train_loader = self.data_loader_factory.build(vid=True, device=self.device)
+ 
+         self.learning_rate = self.cfg.get_float('optimizer.lr')
+@@ -173,7 +180,9 @@ class Engine:
+             batch_size = len(clip_q)
+             self.top1_meter_A_n.update(acc1_A_n, batch_size)
+             self.top5_meter_A_n.update(acc5_A_n, batch_size)
+-
++            
++            #whc
++            self.logger.info("whc {} {} {} {} {} {} {} {}".format(self.current_epoch,i,loss.detach().numpy()[0], loss_A.detach().numpy()[0], loss_M.detach().numpy()[0],acc1_A.detach().numpy()[0], acc5_A.detach().numpy()[0], acc1_M.detach().numpy()[0]))
+             if i > 0 and i % self.log_interval == 0:
+                 # Do logging as late as possible. this will force CUDA sync.
+                 # Log numbers from last iteration, just before update
+diff --git a/train_paddle.py b/train_paddle.py
+index 142f2b7..acaecb3 100644
+--- a/train_paddle.py
++++ b/train_paddle.py
+@@ -6,14 +6,16 @@ import paddle.distributed.spawn as spawn
+ import numpy as np
+ import model_paddle as model
+ import models.resnet as resnet
+-
++import os
+ from arguments import Args
+ from framework import utils
+-
+ from datasets.classification import DataLoaderFactoryV3
+ from framework.config import get_config, save_config
++import paddle.distributed.fleet.base.role_maker as role_maker
++#from framework.utils.whc_checkpoint import CheckpointManager
+ from paddle.distributed import fleet
+-
++#whc
++import logging
+ 
+ class Engine:
+     def __init__(self, args, cfg, local_rank):
+@@ -22,9 +24,28 @@ class Engine:
+         self.current_epoch = 0
+         # self.batch_size = self.args.train_batch_size
+         self.batch_size = cfg.get_int('batch_size')
+-        self.batch_size = 64
+-
++        #self.batch_size = 64
++        self.local_rank=local_rank
++        self.best_loss = float('inf')
++        self.arch = cfg.get_string('arch')
++        role = role_maker.PaddleCloudRoleMaker(is_collective=True)
+         fleet.init(is_collective=True)
++        
++        if fleet.worker_index()==0:
++            #whc add a logger
++            self.logger=logging.getLogger()
++            self.logger.setLevel(logging.INFO)
++            fh=logging.FileHandler("test_log/paddle_res.log",mode="w")
++            fh.setLevel(logging.INFO)
++            self.logger.addHandler(fh)
++            #self.checkpoint = CheckpointManager(
++            #    args.experiment_dir,
++            #    keep_interval=cfg.get_int('checkpoint_interval')
++            #)
++        else:
++            self.checkpoint = None
++
++        #fleet.init(is_collective=True)
+         self.model = model.MoCoWrapper(cfg).build_moco_diffloss()
+ 
+         self.data_loader_factory = DataLoaderFactoryV3(cfg)
+@@ -37,10 +58,17 @@ class Engine:
+             A=self.loss_lambda.get_float('A'),
+             M=self.loss_lambda.get_float('M')
+         )
+-
++        print("####################world_size=",self.args.world_size)
++        if not self.args.no_scale_lr:
++            self.learning_rate = utils.environment.scale_learning_rate(
++                self.learning_rate,
++                self.args.world_size if self.args.world_size==8 else 8,
++                self.batch_size,
++            ) 
++        self.scheduler = paddle.optimizer.lr.CosineAnnealingDecay(learning_rate=self.learning_rate,T_max=self.epochs,eta_min=self.learning_rate/1000)
+         self.optimizer = paddle.optimizer.Momentum(
+             parameters=self.model.parameters(),
+-            learning_rate=self.learning_rate,
++            learning_rate=self.scheduler,
+             momentum=cfg.get_float('optimizer.momentum'),
+             # dampening=cfg.get_float('optimizer.dampening'),
+             weight_decay=cfg.get_float('optimizer.weight_decay'),
+@@ -57,6 +85,8 @@ class Engine:
+         clip_q = paddle.randn([self.batch_size, 3, 16, 112, 112])
+         clip_k = paddle.randn([self.batch_size, 3, 16, 112, 112])
+         # for i in range(loop):
++        avg_loss=0
++        nn=0
+         for i, (clip_q, clip_k) in enumerate(self.train_loader):
+             output, target, ranking_logits, ranking_target = self.model(clip_q, clip_k)
+             loss, loss_A, loss_M = self.criterion(output, target, ranking_logits, ranking_target)
+@@ -76,10 +106,29 @@ class Engine:
+             # acc1_A_n = accuracy(output[1], target, k=1)
+             # acc5_A_n = accuracy(output[1], target, k=5)
+ 
++            #whc get the avg_loss
++            avg_loss += loss.detach().numpy()[0]
++            nn += 1
++
+             # if i > 0 and i % self.log_interval == 0:
+             if True:
+                 print("loss: %f, loss_A: %f, loss_M: %f" % (loss, loss_A, loss_M))
+                 print("acc1_A: %f, acc5_A: %f, acc1_M: %f" % (acc1_A, acc5_A, acc1_M))
++                if fleet.worker_index()==0:
++                    self.logger.info("whc {} {} {} {} {} {} {} {}".format(self.current_epoch,i,loss.detach().numpy()[0], loss_A.detach().numpy()[0], loss_M.detach().numpy()[0],acc1_A.detach().numpy()[0], acc5_A.detach().numpy()[0], acc1_M.detach().numpy()[0]))
++
++        if fleet.worker_index()== 0:
++            avg_loss = avg_loss / nn
++            is_best = avg_loss < self.best_loss
++            self.best_loss = min(avg_loss,self.best_loss)
++            if is_best:
++                best_param=os.path.join(str(self.args.experiment_dir),"best_mode.pdparams")
++                best_optim=os.path.join(str(self.args.experiment_dir),"best_optim.pdparams")
++                best_sche=os.path.join(str(self.args.experiment_dir),"best_sche.pdparams")
++                paddle.save(self.model.state_dict(),best_param)
++                paddle.save(self.optimizer.state_dict(),best_optim)
++                paddle.save(self.scheduler.state_dict(),best_sche) 
++ 
+                 # Do logging as late as possible. this will force CUDA sync.
+                 # Log numbers from last iteration, just before update
+                 # logger.info(
+@@ -89,12 +138,14 @@ class Engine:
+                 #     f'{self.top1_meter_A_n}\t{self.top5_meter_A_n}'
+                 # )
+ 
+-
+             
+     def run(self):
+         while self.current_epoch < self.epochs:
+             print("train epoch: %d" % (self.current_epoch))
+             self.train_epoch()
++            if fleet.worker_index()==0:
++                self.logger.info("epoch {} {}".format(self.current_epoch,self.scheduler.get_lr()))
++            self.scheduler.step()
+             self.current_epoch += 1
+ 
+ 
+
+Local Rank: 0
+I0305 10:51:36.462245 28254 nccl_context.cc:189] init nccl context nranks: 8 local rank: 7 gpu id: 7 ring id: 0
+W0305 10:51:39.012972 28254 device_context.cc:362] Please NOTE: device: 7, GPU Compute Capability: 7.0, Driver API Version: 11.0, Runtime API Version: 10.0
+W0305 10:51:39.019433 28254 device_context.cc:372] device: 7, cuDNN Version: 7.6.
+backbone:  s3dg
+Found fc: fc with in_features: 1024
+Found fc: fc with in_features: 1024
+####################world_size= 8
+adjust lr according to the number of GPU and batch size：0.05 -> 0.0125
+train epoch: 0
+=========AAAAAAAAAA===========
+=========AAAAAAAAAA===========
+=========AAAAAAAAAA===========
+/usr/local/python378-gcc540/lib/python3.7/site-packages/paddle/nn/layer/norm.py:636: UserWarning: When training, we now always track global mean and variance.
+  "When training, we now always track global mean and variance.")
+=========AAAAAAAAAA===========
+=========AAAAAAAAAA===========
+=========AAAAAAAAAA===========
+[128, 16384]
+loss: 20.812269, loss_A: 18.923702, loss_M: 1.888567
+acc1_A: 0.000000, acc5_A: 0.000000, acc1_M: 0.500000
+=========AAAAAAAAAA===========
+[128, 16384]
+loss: 20.899227, loss_A: 19.121710, loss_M: 1.777517
+acc1_A: 0.000000, acc5_A: 0.000000, acc1_M: 0.500000
+=========AAAAAAAAAA===========
+[128, 16384]
+loss: 13.905163, loss_A: 11.847730, loss_M: 2.057434
+acc1_A: 0.000000, acc5_A: 0.000000, acc1_M: 0.000000
+=========AAAAAAAAAA===========
+Traceback (most recent call last):
+  File "train_paddle.py", line 178, in <module>
+    main()
+  File "train_paddle.py", line 166, in main
+    engine.run()
+  File "train_paddle.py", line 145, in run
+    self.train_epoch()
+  File "train_paddle.py", line 91, in train_epoch
+    output, target, ranking_logits, ranking_target = self.model(clip_q, clip_k)
+  File "/usr/local/python378-gcc540/lib/python3.7/site-packages/paddle/fluid/dygraph/layers.py", line 891, in __call__
+    outputs = self.forward(*inputs, **kwargs)
+  File "/usr/local/python378-gcc540/lib/python3.7/site-packages/paddle/fluid/dygraph/parallel.py", line 489, in forward
+    outputs = self._layers(*inputs, **kwargs)
+  File "/usr/local/python378-gcc540/lib/python3.7/site-packages/paddle/fluid/dygraph/layers.py", line 891, in __call__
+    outputs = self.forward(*inputs, **kwargs)
+  File "/home/users/wuhuachao/RSPNet_paddle/model_paddle.py", line 244, in forward
+    self._momentum_update_key_encoder()  # update the key encoder
+  File "<decorator-gen-227>", line 2, in _momentum_update_key_encoder
+  File "/usr/local/python378-gcc540/lib/python3.7/site-packages/paddle/fluid/dygraph/base.py", line 315, in _decorate_function
+    return func(*args, **kwargs)
+  File "/home/users/wuhuachao/RSPNet_paddle/model_paddle.py", line 119, in _momentum_update_key_encoder
+    param_k.set_value(param_k * self.m + param_q * (1. - self.m))
+  File "<decorator-gen-113>", line 2, in set_value
+  File "/usr/local/python378-gcc540/lib/python3.7/site-packages/paddle/fluid/wrapped_decorator.py", line 25, in __impl__
+    return wrapped_func(*args, **kwargs)
+  File "/usr/local/python378-gcc540/lib/python3.7/site-packages/paddle/fluid/framework.py", line 225, in __impl__
+    return func(*args, **kwargs)
+  File "/usr/local/python378-gcc540/lib/python3.7/site-packages/paddle/fluid/dygraph/varbase_patch_methods.py", line 119, in set_value
+    value_np = value.numpy()
+KeyboardInterrupt

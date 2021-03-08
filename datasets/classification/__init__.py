@@ -4,7 +4,8 @@ from pathlib import Path
 
 import torch
 from pyhocon import ConfigTree
-from torch.utils.data import DataLoader, DistributedSampler
+# from torch.utils.data import DataLoader, DistributedSampler
+from paddle.io import DataLoader, DistributedBatchSampler
 
 from ..transforms_video import (transforms_spatial, transforms_temporal,
                                 transforms_tensor)
@@ -127,8 +128,6 @@ class DataLoaderFactoryV3:
             frame_rate=self.cfg.get_float('temporal_transforms.frame_rate'),
         )
 
-        sampler = DistributedSampler(ds, shuffle=(split == 'train'))
-
         if split == 'train':
             batch_size = self.cfg.get_int('batch_size')
         elif self.final_validate:
@@ -136,17 +135,21 @@ class DataLoaderFactoryV3:
         else:
             batch_size = self.cfg.get_int('validate.batch_size')
 
+        sampler = DistributedBatchSampler(ds, batch_size, shuffle=(split == 'train'), drop_last=True)
+
         dl = DataLoader(
             video_dataset,
-            batch_size=batch_size,
-            num_workers=self.cfg.get_int('num_workers'),
-            sampler=sampler,
-            drop_last=(split == 'train'),
-            collate_fn=identity,  # We will deal with collation on main thread.
-            multiprocessing_context=mp.get_context('fork'),
+            #batch_size=batch_size,
+            #num_workers=self.cfg.get_int('num_workers'),
+            num_workers=0,
+            batch_sampler=sampler,
+            # drop_last=(split == 'train'),
+            #collate_fn=identity,  # We will deal with collation on main thread.
+            collate_fn=gpu_collate_fn,  # We will deal with collation on main thread.
+            # multiprocessing_context=mp.get_context('fork'),
         )
-
-        return MainProcessCollateWrapper(dl, gpu_collate_fn)
+        # return MainProcessCollateWrapper(dl, gpu_collate_fn)
+        return dl
 
 
     def _get_normalize(self):
