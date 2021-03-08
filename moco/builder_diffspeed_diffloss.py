@@ -321,7 +321,8 @@ class MoCoDiffLossTwoFc(nn.Module):
 
         for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
             param_k.data.copy_(param_q.data)  # initialize
-            param_k.requires_grad = False  # not update by gradient
+            # param_k.requires_grad = False  # not update by gradient
+            param_k.stop_gradient = True  # not update by gradient
 
         # create the queue
         self.register_buffer("queue", torch.randn(dim, K))
@@ -339,6 +340,7 @@ class MoCoDiffLossTwoFc(nn.Module):
         """
         for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
             param_k.data = param_k.data * self.m + param_q.data * (1. - self.m)
+            param_k.stop_gradient = True
 
     @torch.no_grad()
     def _dequeue_and_enqueue(self, keys):

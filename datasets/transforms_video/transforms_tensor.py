@@ -8,6 +8,7 @@ from torch import Tensor, nn
 from torchvision.transforms import Compose
 
 from . import functional_tensor as F
+import numpy as np
 
 
 class RandomGrayScale:
@@ -222,6 +223,7 @@ class SequentialGPUCollateFn:
 
         batch_size = len(clips)
         num_clips = len(clips[0])
+        
         clip_list: List[List[Optional[Tensor]]] = [[None for _ in range(batch_size)] for _ in range(num_clips)]
         for batch_index, clip in enumerate(clips):  # batch of clip0, clip1
             for clip_index, clip_tensor in enumerate(clip):
@@ -229,5 +231,6 @@ class SequentialGPUCollateFn:
                 clip_tensor = self.transform(clip_tensor)
                 clip_list[clip_index][batch_index] = clip_tensor
 
-        clip_list: List[Tensor] = [torch.stack(x, dim=0) for x in clip_list]
-        return (clip_list, label_tensor, *others)
+        clip_list = [np.array(torch.stack(x, dim=0).cpu()) for x in clip_list]
+        # return (clip_list, label_tensor, *others)
+        return clip_list

@@ -10,7 +10,7 @@ local loss_lambda = import "../optimizer/loss_lambda.libsonnet";
         arch: $.arch,
     },
 
-    dataset: kinetics400, // or kinetics100
+    dataset: kinetics100, // or kinetics400
 
     batch_size: 64,
     num_workers: 4,
