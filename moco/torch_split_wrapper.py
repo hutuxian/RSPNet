@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 
 class Flatten(nn.Layer):
-    def forward(self, x):
+
+    def forward(self, x: Tensor):
         return x.flatten(1)
 
 
@@ -20,15 +21,15 @@ class ConvFc(nn.Layer):
 
     """
 
-    def __init__(self, feat_dim, moco_dim, kernel_size, padding):
+    def __init__(self, feat_dim: int, moco_dim: int, kernel_size: Tuple[int, int, int], padding: Tuple[int, int, int]):
         super().__init__()
-        self.conv1 = nn.Conv3D(feat_dim, feat_dim, kernel_size, padding=padding)
+        self.conv1 = nn.Conv3d(feat_dim, feat_dim, kernel_size, padding=padding)
         self.relu = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv3D(feat_dim, feat_dim, kernel_size, padding=padding)
-        self.avg_pool = nn.AdaptiveAvgPool3D((1, 1, 1))
+        self.conv2 = nn.Conv3d(feat_dim, feat_dim, kernel_size, padding=padding)
+        self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
         self.linear = nn.Linear(feat_dim, moco_dim)
 
-    def forward(self, x):
+    def forward(self, x: Tensor):
         out = self.conv1(x)
         out = self.relu(out)
         out = self.conv2(out)
@@ -44,15 +45,15 @@ class ConvBnFc(nn.Layer):
 
     """
 
-    def __init__(self, feat_dim, moco_dim, kernel_size, padding):
+    def __init__(self, feat_dim: int, moco_dim: int, kernel_size: Tuple[int, int, int], padding: Tuple[int, int, int]):
         super().__init__()
-        self.conv1 = nn.Conv3D(feat_dim, feat_dim, kernel_size, padding=padding)
-        self.bn = nn.BatchNorm3D(feat_dim)
+        self.conv1 = nn.Conv3d(feat_dim, feat_dim, kernel_size, padding=padding)
+        self.bn = nn.BatchNorm3d(feat_dim)
         self.relu = nn.ReLU(inplace=True)
-        self.avg_pool = nn.AdaptiveAvgPool3D((1, 1, 1))
+        self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
         self.linear = nn.Linear(feat_dim, moco_dim)
 
-    def forward(self, x):
+    def forward(self, x: Tensor):
         out = self.conv1(x)
         out = self.bn(out)
         out = self.relu(out)
@@ -69,20 +70,21 @@ class MultiTaskWrapper(nn.Layer):
     """
     def __init__(
             self,
-            base_encoder,
-            num_classes = 128,
-            finetune = False,
-            fc_type = 'linear',
-            groups = 1,
+            base_encoder: Callable[[int], nn.Layer],
+            num_classes: int = 128,
+            finetune: bool = False,
+            fc_type: str = 'linear',
+            groups: int = 1,
     ):
         """
+
         :param base_encoder:
         :param num_classes:
         :param finetune:
         :param fc_type:
         :param groups:
         """
-        super(MultiTaskWrapper, self).__init__()
+        super().__init__()
 
         logger.info('Using MultiTask Wrapper')
         self.finetune = finetune
@@ -91,7 +93,7 @@ class MultiTaskWrapper(nn.Layer):
         self.groups = groups
         self.fc_type = fc_type
 
-        # logger.warning(f'{self.__class__} using groups: {groups}')
+        logger.warning(f'{self.__class__} using groups: {groups}')
 
         self.encoder = base_encoder(num_classes=1)
 
@@ -99,7 +101,7 @@ class MultiTaskWrapper(nn.Layer):
         feat_dim //= groups
 
         if self.finetune:
-            self.avg_pool = nn.AdaptiveAvgPool3D((1, 1, 1))
+            self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
             self.fc = nn.Linear(feat_dim, num_classes)
         else:
             if fc_type == 'linear':
@@ -122,16 +124,12 @@ class MultiTaskWrapper(nn.Layer):
                 self.fc1 = self._get_linear_fc(feat_dim, self.moco_dim)
                 self.fc2 = self._get_linear_fc(feat_dim, 1)  # use for speed binary classification like speednet
 
-    def forward(self, x):
-        print("==========enter==========")
-        feat = self.encoder.get_feature(x)
-        print("==============forward========",feat.shape)
-        
+    def forward(self, x: Tensor):
+        feat: Tensor = self.encoder.get_feature(x)
+
         if self.finetune:
             x3 = self.avg_pool(feat)
-            print("=============MMMMM",x3.shape)
             x3 = x3.flatten(1)
-            print("=========VVVVV===========")
             x3 = self.fc(x3)
             return x3
         else:
@@ -144,26 +142,26 @@ class MultiTaskWrapper(nn.Layer):
                 x2 = self.fc2(feat2)
             else:
                 raise Exception
-            x1 = F.normalize(x1, axis=1)
+            x1 = F.normalize(x1, dim=1)
 
             if self.fc_type == 'speednet':  # for speednet, it use sigmoid to ouput the probability that whether the clip is sped up 
-                x2 = paddle.sigmoid(x2)
+                x2 = F.sigmoid(x2)
             else:
-                x2 = F.normalize(x2, axis=1)
+                x2 = F.normalize(x2, dim=1)
             return x1, x2
 
     @staticmethod
-    def _get_linear_fc(feat_dim, moco_dim):
+    def _get_linear_fc(feat_dim: int, moco_dim: int):
         return nn.Sequential(
-            nn.AdaptiveAvgPool3D((1, 1, 1)),
+            nn.AdaptiveAvgPool3d((1, 1, 1)),
             Flatten(),
             nn.Linear(feat_dim, moco_dim),
         )
 
     @staticmethod
-    def _get_mlp_fc(feat_dim, moco_dim):
+    def _get_mlp_fc(feat_dim: int, moco_dim: int):
         return nn.Sequential(
-            nn.AdaptiveAvgPool3D((1, 1, 1)),
+            nn.AdaptiveAvgPool3d((1, 1, 1)),
             Flatten(),
             nn.Linear(feat_dim, feat_dim),
             nn.ReLU(inplace=True),
@@ -176,7 +174,7 @@ class MultiTaskWrapper(nn.Layer):
         feat_dim = 512
         for fc_name in fc_names:
             if hasattr(encoder, fc_name):
-                feat_dim = getattr(encoder, fc_name).weight.shape[0]
-                logger.warning('Found fc: %s with in_features: %d' % (fc_name, feat_dim))
+                feat_dim = getattr(encoder, fc_name).in_features
+                logger.info(f'Found fc: {fc_name} with in_features: {feat_dim}')
                 break
         return feat_dim

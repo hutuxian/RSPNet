@@ -123,15 +123,11 @@ class MultiTaskWrapper(nn.Layer):
                 self.fc2 = self._get_linear_fc(feat_dim, 1)  # use for speed binary classification like speednet
 
     def forward(self, x):
-        print("==========enter==========")
         feat = self.encoder.get_feature(x)
-        print("==============forward========",feat.shape)
-        
+
         if self.finetune:
             x3 = self.avg_pool(feat)
-            print("=============MMMMM",x3.shape)
             x3 = x3.flatten(1)
-            print("=========VVVVV===========")
             x3 = self.fc(x3)
             return x3
         else:

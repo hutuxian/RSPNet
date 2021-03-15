@@ -3,9 +3,13 @@ import numbers
 import random
 from typing import Callable, List, Optional, Tuple
 
-import torch
-from torch import Tensor, nn
-from torchvision.transforms import Compose
+#import torch
+#from torch import Tensor, nn
+#from torchvision.transforms import Compose
+
+import paddle
+from paddle import Tensor,nn
+from paddle.vision.transforms import Compose
 
 from . import functional_tensor as F
 import numpy as np
@@ -146,7 +150,7 @@ class ColorJitter(object):
         return format_string
 
 
-class GaussianBlur(nn.Module):
+class GaussianBlur(nn.Layer):
     r"""Creates an operator that blurs a tensor using a Gaussian filter.
 
     The operator smooths the given tensor with a gaussian kernel by convolving
@@ -186,9 +190,9 @@ class GaussianBlur(nn.Module):
         computed = [(k - 1) // 2 for k in kernel_size]
         return computed[0], computed[1]
 
-    def forward(self, x: torch.Tensor):  # type: ignore
-        if not torch.is_tensor(x):
-            raise TypeError("Input x type is not a torch.Tensor. Got {}"
+    def forward(self, x: paddle.Tensor):  # type: ignore
+        if not paddle.is_tensor(x):
+            raise TypeError("Input x type is not a paddle.Tensor. Got {}"
                             .format(type(x)))
         if not len(x.shape) == 4:
             raise ValueError("Invalid input shape, we expect BxCxHxW. Got: {}"
@@ -201,13 +205,13 @@ class GaussianBlur(nn.Module):
         # convolve tensor with gaussian kernel
         # separate 3 channel so that group=3
         x = x.transpose(0, 1)  # [C, T, H, W] -> [T, C, H, W]
-        y = torch.nn.functional.conv2d(x, self.kernel, padding=self._padding, stride=1, groups=3)
+        y = paddle.nn.functional.conv2d(x, self.kernel, padding=self._padding, stride=1, groups=3)
         return y.transpose(0, 1).contiguous()
 
 
 class SequentialGPUCollateFn:
 
-    def __init__(self, transform=None, target_transform=True, device=torch.device('cuda')):
+    def __init__(self, transform=None, target_transform=True, device=paddle.CUDAPlace(0)):
         self.transform = transform
         self.target_transform = target_transform
         self.device = device
@@ -216,26 +220,23 @@ class SequentialGPUCollateFn:
         clips, label, *others = zip(*batch)  # [[video * 2], label] -> [[video * 2]], [label]
 
         if self.target_transform:
-            label_tensor = torch.as_tensor(label)
+            #label_tensor = torch.as_tensor(label)
+            #label_tensor = paddle.Tensor(label)
             #label_tensor = label_tensor.cuda(device=self.device, non_blocking=True)
+            label_tensor = paddle.to_tensor(label,place=self.device)
         else:
             label_tensor = None
 
         batch_size = len(clips)
         num_clips = len(clips[0])
         clip_list: List[List[Optional[Tensor]]] = [[None for _ in range(batch_size)] for _ in range(num_clips)]
-        try:
-            for batch_index, clip in enumerate(clips):  # batch of clip0, clip1
-                for clip_index, clip_tensor in enumerate(clip):
-                    #clip_tensor = clip_tensor.cuda(device=self.device, non_blocking=True)
-                    clip_tensor = self.transform(clip_tensor)
-                    clip_list[clip_index][batch_index] = clip_tensor
-            clip_list = [np.array(torch.stack(x, dim=0).cpu()) for x in clip_list]
-        except Exception as e:
-            print("==============DDDDDDDDDDDD===========",e)
-        try:
-            x,y,z=(clip_list, label_tensor.cpu().numpy() if label_tensor is not None else np.zeros_like(clip_list[0]), others)
-        except Exception as e:
-           print("===========EEEEEEEEEE==============",e)
-        return x,y,z
-        #return clip_list
+        for batch_index, clip in enumerate(clips):  # batch of clip0, clip1
+            clips = paddle.to_tensor(clips,place=self.device)
+            for clip_index, clip_tensor in enumerate(clip):
+                #clip_tensor = clip_tensor.cuda(device=self.device, non_blocking=True)
+                clip_tensor = self.transform(clip_tensor)
+                clip_list[clip_index][batch_index] = clip_tensor
+
+        clip_list = [np.array(paddle.stack(x, dim=0).cpu()) for x in clip_list]
+        # return (clip_list, label_tensor, *others)
+        return clip_list

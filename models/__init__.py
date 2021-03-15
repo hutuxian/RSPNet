@@ -4,16 +4,19 @@ Abstract the process of creating a model into get_model_class, model_class(num_c
 """
 
 from pyhocon import ConfigTree, ConfigFactory
-from torch import nn
-import torch
-from torch import nn
+#from torch import nn
+#import torch
+#from torch import nn
 from typing import *
 import logging
+
+import paddle
+from paddle import nn
 
 logger = logging.getLogger(__name__)
 
 
-def get_model_class(**kwargs) -> Callable[[int], nn.Module]:
+def get_model_class(**kwargs) -> Callable[[int], nn.Layer]:
     """
     Pass the model config as parameters. For convinence, we change the cfg to dict, and then reverse it
     :param kwargs:
@@ -80,8 +83,9 @@ class ModelFactory:
     def __init__(self, cfg: ConfigTree):
         self.cfg = cfg
 
-    def _post_process_model(self, model: nn.Module):
+    def _post_process_model(self, model: nn.Layer):
         if self.cfg.get_bool('only_train_fc', False):
+            print("===============fix some layer===============>")
             for param in model.parameters():
                 param.requires_grad = False
 
@@ -105,7 +109,7 @@ class ModelFactory:
 
         return model
 
-    def build(self, local_rank: int) -> nn.Module:
+    def build(self, local_rank: int) -> nn.Layer:
         # arch = self.cfg.get_string('model.arch')
         num_classes = self.cfg.get_int('dataset.num_classes')
 
@@ -114,30 +118,30 @@ class ModelFactory:
         model = model_class(num_classes=num_classes)
         model = self._post_process_model(model)
 
-        model = model.cuda(local_rank)
-
-        model = nn.parallel.DistributedDataParallel(
-            model,
-            device_ids=[local_rank],
-        )
+        #model = model.cuda(local_rank)
+        #model = nn.parallel.DistributedDataParallel(
+        #    model,
+        #    device_ids=[local_rank],
+        #)
         return model
 
-    def build_multitask_wrapper(self, local_rank: int) -> nn.Module:
+    def build_multitask_wrapper(self, local_rank: int) -> nn.Layer:
         # arch = self.cfg.get_string('model.arch')
 
         from moco.split_wrapper import MultiTaskWrapper
         num_classes = self.cfg.get_int('dataset.num_classes')
 
         model_class = get_model_class(**self.cfg.get_config('model'))
-
+       
+        print("============model_class============>",model_class)
+        
         model = MultiTaskWrapper(model_class, num_classes=num_classes, finetune=True)
         model = self._post_process_model(model)
 
-        model = model.cuda(local_rank)
-
-        model = nn.parallel.DistributedDataParallel(
-            model,
-            device_ids=[local_rank],
-            find_unused_parameters=True,  # some of forward output are not involved in calculation
-        )
+        #model = model.cuda(local_rank)
+        #model = nn.parallel.DistributedDataParallel(
+        #    model,
+        #    device_ids=[local_rank],
+        #    find_unused_parameters=True,  # some of forward output are not involved in calculation
+        #)
         return model

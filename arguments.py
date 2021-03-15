@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import *
 
-import torch
+#import torch
+
+import paddle
+import paddle.distributed as dist
+
 from typed_args import add_argument
 
 from framework.arguments import Args as BaseArgs
@@ -17,7 +21,8 @@ def get_world_size() -> int:
     It has to be larger than 2. Otherwise, the shuffle bn cannot work.
     :return:
     """
-    num_gpus = torch.cuda.device_count()
+    #num_gpus = torch.cuda.device_count()
+    num_gpus = dist.get_world_size()
     return max(2, num_gpus)
     # return num_gpus
 
@@ -44,7 +49,7 @@ class Args(BaseArgs):
         '--seed', help='random seed'
     )
     world_size: int = add_argument(
-        '--ws', '--world-size', default=torch.cuda.device_count(),
+        '--ws', '--world-size', default=dist.get_world_size(),
         help='total processes'
     )
     _continue: bool = add_argument(

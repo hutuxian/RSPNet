@@ -77,8 +77,13 @@ class Args(TypedArgs):
         if self.experiment_dir is not None:
             self.experiment_dir.mkdir(parents=True, exist_ok=True)
             if not self.ask_for_replacing_older_dir(self.run_dir):
-                raise EnvironmentError(f'Run dir "{self.run_dir}" exists')
-            self.run_dir.mkdir(parents=True, exist_ok=False)
+                print(f'Run dir "{self.run_dir}" exists')
+                #raise EnvironmentError(f'Run dir "{self.run_dir}" exists')
+            else:
+                try:
+                    self.run_dir.mkdir(parents=True, exist_ok=False)
+                except Exception as e:
+                    print(f'Run dir "{self.run_dir}" exists#################')
 
     def make_experiment_dir(self):
         if not self.ask_for_replacing_older_dir(self.experiment_dir):
@@ -92,9 +97,10 @@ class Args(TypedArgs):
         print(
             f'File exists: {dir_to_be_replaced}\nDo you want to remove it and create a new one?'
         )
-        choice = input('Remove older directory? [y]es/[n]o: ')
-
-        if choice in ['y', 'yes']:
-            shutil.rmtree(dir_to_be_replaced)
-            return True
-        return False
+        #choice = input('Remove older directory? [y]es/[n]o: ')
+        shutil.rmtree(dir_to_be_replaced)
+        return True
+        #if choice in ['y', 'yes']:
+        #    shutil.rmtree(dir_to_be_replaced)
+        #    return True
+        #return False

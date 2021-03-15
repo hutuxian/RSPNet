@@ -1,14 +1,15 @@
 import time
 import logging
 import warnings
-
+import os
 import paddle
 import paddle.distributed as dist
 from pyhocon import ConfigTree
 from paddle import nn
-from paddle.distributed import fleet
+#from torch.utils.tensorboard import SummaryWriter
 
-from torch.utils.tensorboard import SummaryWriter
+from paddle.distributed import fleet
+import paddle.distributed.fleet.base.role_maker as role_maker
 
 from arguments import Args
 from datasets.classification import DataLoaderFactoryV3
@@ -31,35 +32,47 @@ class EpochContext:
         self.n_crop = n_crop
         self.name = name
         self.dataloader = dataloader
-        self.tensorboard_prefix = tensorboard_prefix
+        #self.tensorboard_prefix = tensorboard_prefix
 
-        self.dataloader.set_epoch(self.engine.current_epoch)
+        #self.dataloader.set_epoch(self.engine.current_epoch)
         # start dataloader early for better performance
         self.data_iter = iter(dataloader)
 
         device = self.engine.device
-        self.loss_meter = AverageMeter('Loss', device=device)  # This place displays decimals directly because the loss is relatively large
-        self.top1_meter = AverageMeter('Acc@1', fmt=':6.2f', device=device)
-        self.top5_meter = AverageMeter('Acc@5', fmt=':6.2f', device=device)
+        #self.loss_meter = AverageMeter('Loss', device=device)  # This place displays decimals directly because the loss is relatively large
+        #self.top1_meter = AverageMeter('Acc@1', fmt=':6.2f', device=device)
+        #self.top5_meter = AverageMeter('Acc@5', fmt=':6.2f', device=device)
 
-    def reshape_clip(self, clip: torch.FloatTensor):
+    def reshape_clip(self, clip):
         if self.n_crop == 1:
             return clip
-        clip = clip.refine_names('batch', 'channel', 'time', 'height', 'width')
-        crop_len = clip.size(2) // self.n_crop
-        clip = clip.unflatten('time', [('crop', self.n_crop), ('time', crop_len)])
-        clip = clip.align_to('batch', 'crop', ...)
-        clip = clip.flatten(['batch', 'crop'], 'batch')
-        return clip.rename(None)
+        #clip = clip.refine_names('batch', 'channel', 'time', 'height', 'width')
+        #crop_len = clip.shape[2] // self.n_crop
+        #clip = clip.unflatten('time', [('crop', self.n_crop), ('time', crop_len)])
+        #clip = clip.align_to('batch', 'crop', ...)
+        #clip = clip.flatten(['batch', 'crop'], 'batch')
+        
+        b,c,t,h,w=clip.shape
+        crop_len = clip.shape[2] // self.n_crop
+        clip = clip.reshape((b,c,self.n_crop,crop_len,h,w))
+        clip = paddle.transpose(clip,(0,2,1,3,4,5))
+        clip = paddle.flatten(clip,start_axis=0,stop_axis=1)       
+        return clip
 
-    def average_logits(self, logits: torch.FloatTensor):
+    def average_logits(self, logits):
         if self.n_crop == 1:
             return logits
-        logits = logits.refine_names('batch', 'class')
-        num_sample = logits.size(0) // self.n_crop
-        logits = logits.unflatten('batch', [('batch', num_sample), ('crop', self.n_crop)])
-        logits = logits.mean(dim='crop')
-        return logits.rename(None)
+        #logits = torch.as_tensor(logits.cpu().numpy())
+        #logits = logits.refine_names('batch', 'class')
+        #num_sample = logits.shape[0] // self.n_crop
+        #logits = logits.unflatten('batch', [('batch', num_sample), ('crop', self.n_crop)])
+        #logits = logits.mean(dim='crop')
+        
+        b,cls = logits.shape
+        num_sample = logits.shape[0] // self.n_crop
+        logits = logits.reshape((num_sample,self.n_crop,cls))
+        logits = logits.mean(axis=1)
+        return logits
 
     def meters(self):
         yield self.loss_meter
@@ -91,17 +104,19 @@ class EpochContext:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.write_tensorboard()
+        pass
+        #self.write_tensorboard()
 
     def forward(self):
         logger.info('%s epoch begin.', self.name)
         begin_time = time.perf_counter()
         num_iters = len(self.dataloader)
-        remaining_valid_samples = self.dataloader.num_valid_samples()
-
+        print("=============len=======",num_iters)
         for i, ((clip,), target, *others) in enumerate(self.data_iter):
+            target = paddle.reshape(target,(-1,1))
             clip = self.reshape_clip(clip)
             output = self.engine.model(clip)
+            
             output = self.average_logits(output)
             loss = self.engine.criterion(output, target)
 
@@ -110,41 +125,22 @@ class EpochContext:
             #     self.engine.summary_writer.add_scalar(f'step/{self.tensorboard_prefix}/loss', loss,
             #         self.engine.current_epoch * num_iters + i)
 
-            batch_size = target.size(0)
-            if batch_size > remaining_valid_samples:
-                # Distributed sampler will add some repeated samples. cut them off.
-                output = output[:remaining_valid_samples]
-                target = target[:remaining_valid_samples]
-                others = [o[:remaining_valid_samples] for o in others]
-                batch_size = remaining_valid_samples
-            remaining_valid_samples -= batch_size
-
-            if batch_size == 0:
-                continue
-
             if i > 0 and i % self.log_interval == 0:
                 # Do logging as late as possible. this will force CUDA sync.
                 # Log numbers from last iteration, just before update
-                logger.info(
-                    f'{self.name} [{self.engine.current_epoch}/{self.engine.num_epochs}][{i - 1}/{num_iters}]\t'
-                    f'{self.loss_meter}\t{self.top1_meter}\t{self.top5_meter}'
-                )
+                print("name:{} epoch:{} step:{} loss:{} acc1:{} acc5:{}".format(self.name,self.engine.current_epoch,i,loss.cpu().numpy(),acc1.cpu().numpy(),acc5.cpu().numpy()))
 
-            num_classes = output.size(1)
+            num_classes = output.shape[1]
             if num_classes >= 5:
-                acc1, acc5 = accuracy(output, target, topk=(1, 5))
-                self.top1_meter.update(acc1, batch_size)
-                self.top5_meter.update(acc5, batch_size)
+                acc1 = paddle.metric.accuracy(output, target,k=1)
+                acc5 = paddle.metric.accuracy(output, target,k=5)
             else:
-                acc1, = accuracy(output, target, topk=(1,))
-                self.top1_meter.update(acc1, batch_size)
-
-            self.loss_meter.update(loss, batch_size)
-
-            yield loss, output, others
+                acc1 = paddle.metric.accuracy(output, target,k=1)
+            
+            yield loss, output, target.cpu().numpy().flatten().tolist(), acc1, acc5
 
         end_time = time.perf_counter()
-        logger.info('%s epoch finished. Time: %.2f sec.\t%s\t%s\t%s', self.name, end_time - begin_time, *self.meters())
+        print("epoch finished. Time: %.2f sec",end_time - begin_time)
 
 
 class Engine:
@@ -154,13 +150,13 @@ class Engine:
         self.cfg = cfg
         self.local_rank = local_rank
 
-        self.model_factory = ModelFactory(cfg)
+        self.num_epochs = cfg.get_int('num_epochs')
         self.data_loader_factory = DataLoaderFactoryV3(cfg, final_validate)
         self.final_validate = final_validate
 
-        self.device = torch.device(
-            f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu')
+        self.device = paddle.CUDAPlace(local_rank)
 
+        self.model_factory = ModelFactory(cfg)
         model_type = cfg.get_string('model_type')
         if model_type == '1stream':
             self.model = self.model_factory.build(local_rank)  # basic model
@@ -168,6 +164,7 @@ class Engine:
             self.model = self.model_factory.build_multitask_wrapper(local_rank)
         else:
             raise ValueError(f'Unrecognized model_type "{model_type}"')
+         
         if not final_validate:
             self.train_loader = self.data_loader_factory.build(
                 vid=False,  # need label to gpu
@@ -188,76 +185,89 @@ class Engine:
         self.criterion = nn.CrossEntropyLoss()
 
         self.learning_rate = self.cfg.get_float('optimizer.lr')
-        optimizer_type = self.cfg.get_string('optimizer.type', default='sgd')
-        if optimizer_type == 'sgd':
-            self.optimizer = torch.optim.SGD(
-                self.model.parameters(),
-                lr=self.learning_rate,
-                momentum=self.cfg.get_float('optimizer.momentum'),
-                dampening=self.cfg.get_float('optimizer.dampening'),
-                weight_decay=self.cfg.get_float('optimizer.weight_decay'),
-                nesterov=self.cfg.get_bool('optimizer.nesterov'),
-            )
-        elif optimizer_type == 'adam':
-            self.optimizer = torch.optim.Adam(
-                self.model.parameters(),
-                lr=self.learning_rate,
-                eps=self.cfg.get_float('optimizer.eps'),
-            )
-        else:
-            raise ValueError(f'Unknown optimizer {optimizer_type})')
-
-        self.num_epochs = cfg.get_int('num_epochs')
+        
         self.schedule_type = self.cfg.get_string('optimizer.schedule')
         if self.schedule_type == "plateau":
-            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer=self.optimizer,
+            self.scheduler = paddle.optimizer.lr.ReduceOnPlateau(
+                learning_rate=self.learning_rate,
                 mode='min',
                 patience=self.cfg.get_int('optimizer.patience'),
                 verbose=True
             )
         elif self.schedule_type == "multi_step":
-            self.scheduler = torch.optim.lr_scheduler.MultiStepLR(
-                optimizer=self.optimizer,
+            self.scheduler = paddle.optimizer.lr.MultiStepDecay (
+                learning_rate=self.learning_rate,
                 milestones=self.cfg.get("optimizer.milestones"),
             )
         elif self.schedule_type == "cosine":
-            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer=self.optimizer,
+            self.scheduler = paddle.optimizer.lr.CosineAnnealingDecay(
+                learning_rate=self.learning_rate,
                 T_max=self.num_epochs,
                 eta_min=self.learning_rate / 1000
             )
         elif self.schedule_type == 'none':
-            self.scheduler = torch.optim.lr_scheduler.LambdaLR(
-                optimizer=self.optimizer,
-                lr_lambda=lambda epoch: 1,
+            self.scheduler = paddle.optimizer.lr.LambdaDecay(
+                learning_rate=self.learning_rate,
+                lr_lambda = lambda epoch: 1,
             )
         else:
             raise ValueError("Unknow schedule type")
-
-        self.arch = cfg.get_string('model.arch')
-
-        if local_rank == 0:
-            self.summary_writer = SummaryWriter(
-                log_dir=str(args.experiment_dir)
+         
+        
+        optimizer_type = self.cfg.get_string('optimizer.type', default='sgd')
+        if optimizer_type == 'sgd':
+            self.optimizer = paddle.optimizer.Momentum(
+                parameters=self.model.parameters(),
+                learning_rate=self.scheduler,
+                momentum=self.cfg.get_float('optimizer.momentum'),
+                #dampening=self.cfg.get_float('optimizer.dampening'),
+                weight_decay=self.cfg.get_float('optimizer.weight_decay'),
+                use_nesterov=self.cfg.get_bool('optimizer.nesterov'),
+            )
+        elif optimizer_type == 'adam':
+            self.optimizer = paddle.optimizer.Adam(
+                self.model.parameters(),
+                learning_rate=self.scheduler,
+                epsilon=self.cfg.get_float('optimizer.eps'),
             )
         else:
-            self.summary_writer = None
+            raise ValueError(f'Unknown optimizer {optimizer_type})')
 
+        if not final_validate:         
+            self.optimizer = fleet.distributed_optimizer(self.optimizer)
+            self.model = fleet.distributed_model(self.model)
+
+        self.arch = cfg.get_string('model.arch')
+        
         self.best_acc1 = 0.
         self.current_epoch = 0
         self.next_epoch = None
         logger.info('Engine: n_crop=%d', self.n_crop)
 
-        self.checkpoint_manager = CheckpointManager(
-            self.args.experiment_dir, keep_interval=None
-        )
         self.loss_meter = None
 
     def has_next_epoch(self):
         return not self.final_validate and self.current_epoch < self.num_epochs - 1
 
+
     def load_checkpoint(self, checkpoint_path):
+        env_path=self.args.experiment_dir
+        print(env_path)
+        best_param=os.path.join(str(self.args.experiment_dir),"best_fineture_mode.pdparams")
+        best_optim=os.path.join(str(self.args.experiment_dir),"best_fineture_optim.pdopt")
+        best_sche=os.path.join(str(self.args.experiment_dir),"best_fineture_sche.pdparams")
+
+        print(best_param)
+        A=paddle.load(best_param)
+        B=paddle.load(best_optim)
+        C=paddle.load(best_sche)
+        print("========pppppppppp=========")
+        self.model.set_state_dict(A)
+        #self.optimizer.set_state_dict(B)
+        self.scheduler.set_state_dict(C)
+        print("===============load params done=============")
+        
+    def pre_load_checkpoint(self, checkpoint_path):
         states = torch.load(checkpoint_path, map_location=self.device)
         if states['arch'] != self.arch:
             raise ValueError(f'Loading checkpoint arch {states["arch"]} does not match current arch {self.arch}')
@@ -272,6 +282,23 @@ class Engine:
         self.best_acc1 = states['best_acc1']
 
     def load_moco_checkpoint(self, checkpoint_path: str):
+        # paddle save params directly at present
+        moco_state=paddle.load(checkpoint_path)
+        prefix = 'encoder_q.'
+
+        """
+        fc -> fc. for c3d sport1m. Beacuse fc6 and fc7 is in use.
+        """
+        blacklist = ['fc.', 'linear', 'head', 'new_fc', 'fc8']
+        blacklist += ['encoder_fuse'] 
+        
+        def filter(k):
+            return k.startswith(prefix) and not any(k.startswith(f'{prefix}{fc}') for fc in blacklist)
+               
+        model_state = {k[len(prefix):]: v for k, v in moco_state.items() if filter(k)}
+        self.model.set_state_dict(model_state)
+    
+    def pre_load_moco_checkpoint(self, checkpoint_path: str):
         cp = torch.load(checkpoint_path, map_location=self.device)
         if 'model' in cp and 'arch' in cp:
             logger.info('Loading MoCo checkpoint from %s (epoch %d)', checkpoint_path, cp['epoch'])
@@ -333,10 +360,9 @@ class Engine:
         self.model.train()
         with epoch:
             for loss, *_ in epoch.forward():
-                self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-        self.loss_meter = epoch.loss_meter
+                self.model.clear_gradients()
 
     def validate_epoch(self):
         epoch = self.next_epoch
@@ -348,33 +374,42 @@ class Engine:
             self.next_epoch = None
 
         self.model.eval()
-        all_logits = torch.empty(0, device=next(self.model.parameters()).device)
+        #all_logits = torch.empty(0, device=next(self.model.parameters()).device)
+        all_logits = None
         indices = []
+        print("===============start valid==============")
         with epoch:
-            with torch.no_grad():
-                for _, logits, others in epoch.forward():
-                    all_logits = torch.cat((all_logits, logits), dim=0)
-                    if others:
-                        assert len(others[0]) == logits.size(0), \
-                            f'Length of indices and logits not match. {others[0]} vs {logits.size(0)}'
-                        indices.extend(others[0])
-
-            epoch.sync_meters()
-            logger.info('Validation finished.\n\tLoss = %f\n\tAcc@1 = %.2f%% (%d/%d)\n\tAcc@5 = %.2f%% (%d/%d)',
-                        epoch.loss_meter.avg.item(),
-                        epoch.top1_meter.avg.item(), epoch.top1_meter.sum.item() / 100, epoch.top1_meter.count.item(),
-                        epoch.top5_meter.avg.item(), epoch.top5_meter.sum.item() / 100, epoch.top5_meter.count.item(),
-                        )
+            with paddle.no_grad():
+                sum_loss = sum_acc1 = sum_acc5 = 0
+                nn = 0
+                for loss, logits, others , acc1, acc5 in epoch.forward():
+                    #all_logits = torch.cat((all_logits, logits), dim=0)
+                    nn+=1
+                    sum_loss += loss.cpu().numpy()
+                    sum_acc1 += acc1.cpu().numpy()
+                    sum_acc5 += acc5.cpu().numpy()
+                    if all_logits is None:
+                        all_logits=logits
+                        continue
+                    else:
+                        all_logits = paddle.concat((all_logits, logits), axis=0)
+            print("Validation finished. avg_loss={} avg_acc1={} avg_acc5={}".format(sum_loss/nn,sum_acc1/nn,sum_acc5/nn))
+            
+            #logger.info('Validation finished.\n\tLoss = %f\n\tAcc@1 = %.2f%% (%d/%d)\n\tAcc@5 = %.2f%% (%d/%d)',
+            #            epoch.loss_meter.avg.item(),
+            #            epoch.top1_meter.avg.item(), epoch.top1_meter.sum.item() / 100, epoch.top1_meter.count.item(),
+            #            epoch.top5_meter.avg.item(), epoch.top5_meter.sum.item() / 100, epoch.top5_meter.count.item(),
+            #            )
 
         if self.final_validate:
             ds = self.validate_loader.dataset
             if hasattr(ds, 'save_results'):
                 assert indices, 'Dataset should return indices to sort logits'
-                assert len(indices) == all_logits.size(0), \
+                assert len(indices) == all_logits.shape[0], \
                     f'Length of indices and logits not match. {len(indices)} vs {all_logits.size(0)}'
-                with (self.args.experiment_dir / f'results_{self.local_rank}.json').open('w') as f:
-                    ds.save_results(f, indices, all_logits)
-        return epoch.top1_meter.avg.item()
+                #with (self.args.experiment_dir / f'results_{self.local_rank}.json').open('w') as f:
+                #    ds.save_results(f, indices, all_logits)
+        return sum_acc1/nn
 
     def run(self):
 
@@ -383,9 +418,7 @@ class Engine:
         self.model.train()
 
         while self.current_epoch < num_epochs:
-            logger.info("Current LR:{}".format(self.scheduler._last_lr))
-            if self.summary_writer is not None:
-                self.summary_writer.add_scalar('train/lr', utils.get_lr(self.optimizer), self.current_epoch)
+            logger.info("Current LR:{}".format(self.scheduler.get_lr()))
             self.train_epoch()
             acc1 = self.validate_epoch()
             if self.schedule_type == "plateau":
@@ -395,7 +428,7 @@ class Engine:
 
             self.current_epoch += 1
 
-            if self.local_rank == 0:
+            if fleet.worker_index() == 0:
                 is_best = acc1 > self.best_acc1
                 self.best_acc1 = max(acc1, self.best_acc1)
 
@@ -407,28 +440,27 @@ class Engine:
                 #     'optimizer': self.optimizer.state_dict(),
                 #     'scheduler': self.scheduler.state_dict(),
                 # }, is_best, self.args.experiment_dir)
-                self.checkpoint_manager.save(
-                    {
-                        'epoch': self.current_epoch,
-                        'arch': self.arch,
-                        'model': self.model.module.state_dict(),
-                        'best_acc1': self.best_acc1,
-                        'optimizer': self.optimizer.state_dict(),
-                        'scheduler': self.scheduler.state_dict(),
-                    },
-                    is_best,
-                    self.current_epoch
-                )
-
-        if self.summary_writer is not None:
-            self.summary_writer.flush()
+                if is_best:
+                    best_param=os.path.join(str(self.args.experiment_dir),"best_fineture_mode.pdparams")
+                    best_optim=os.path.join(str(self.args.experiment_dir),"best_fineture_optim.pdopt")
+                    best_sche=os.path.join(str(self.args.experiment_dir),"best_fineture_sche.pdparams")
+                    paddle.save(self.model.state_dict(),best_param)
+                    paddle.save(self.optimizer.state_dict(),best_optim)
+                    paddle.save(self.scheduler.state_dict(),best_sche)
+                    print("===================save params===================")
 
 
-def main_worker(args: Args):
-    
-    
+def main_worker(local_rank: int, args: Args):
     print('Local Rank:', local_rank)
 
+    #when train and val finished, do the final val
+    if False: 
+        print("==========final==========")
+        cfg = get_config(args)
+        engine = Engine(args, cfg, local_rank=local_rank, final_validate=True)
+        engine.load_checkpoint("")
+        engine.validate_epoch()
+        return
     # log in main process only
     if local_rank == 0:
         set_logging_basic_config(args)
@@ -436,43 +468,32 @@ def main_worker(args: Args):
     logger.info(f'Args = \n{args}')
 
     if args.config is not None and args.experiment_dir is not None:
-        # Open multi-process. We only have one group, which is on the current node.
-        dist.init_process_group(
-            backend='nccl',
-            init_method=dist_url,
-            world_size=args.world_size,
-            rank=local_rank,
-        )
-        utils.reproduction.cudnn_benchmark()
-
         cfg = get_config(args)
         if local_rank == 0:
             save_config(args, cfg)
             args.save()
 
-        with torch.cuda.device(local_rank):
-            if not args.validate:
-                engine = Engine(args, cfg, local_rank=local_rank)
-                if args.load_checkpoint is not None:
-                    engine.load_checkpoint(args.load_checkpoint)
-                elif args.moco_checkpoint is not None:
-                    engine.load_moco_checkpoint(args.moco_checkpoint)
-                engine.run()
-                validate_checkpoint = args.experiment_dir / 'model_best.pth.tar'
-            else:
-                validate_checkpoint = args.load_checkpoint
-                if not validate_checkpoint:
-                    raise ValueError('With "--validate" specified, you should also specify "--load-checkpoint"')
-
-            logger.info('Doing final validate.')
-            engine = Engine(args, cfg, local_rank=local_rank, final_validate=True)
-            engine.load_checkpoint(validate_checkpoint)
-            engine.validate_epoch()
-            if engine.summary_writer is not None:
-                engine.summary_writer.flush()
-
-    else:
-        logger.warning('No config. Do nothing.')
+        if not args.validate:
+            engine = Engine(args, cfg, local_rank=local_rank)
+            print("=============ready load data=============")
+            if args.load_checkpoint is not None:
+                engine.load_checkpoint(args.load_checkpoint)
+            elif args.moco_checkpoint is not None:
+                engine.load_moco_checkpoint(args.moco_checkpoint)
+            engine.run()
+            validate_checkpoint = args.experiment_dir / 'model_best.pth.tar'
+        else:
+            validate_checkpoint = args.load_checkpoint
+            if not validate_checkpoint:
+                raise ValueError('With "--validate" specified, you should also specify "--load-checkpoint"')
+        
+        #print("===========final_final=========")
+        #if fleet.worker_index() == 0:
+        #    logger.info('==============>Doing final validate.')
+        #    engine = Engine(args, cfg, local_rank=local_rank, final_validate=True)
+        #    engine.load_checkpoint(validate_checkpoint)
+        #    engine.validate_epoch()
+        #    print("==========complete=============")
 
 
 def main():
@@ -488,8 +509,11 @@ def main():
     pack_code(args.run_dir)
 
     utils.environment.ulimit_n_max()
-    main_worker(args)
-    
+
+    role = role_maker.PaddleCloudRoleMaker(is_collective=True)
+    fleet.init(is_collective=True)
+    main_worker(fleet.worker_index(),args)
 
 if __name__ == '__main__':
     main()
+    
