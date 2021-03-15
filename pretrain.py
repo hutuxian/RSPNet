@@ -24,7 +24,7 @@ from framework.utils.checkpoint import CheckpointManager
 from moco import ModelFactory
 from moco.builder_diffspeed_diffloss import Loss
 from utils.moco import replace_moco_k_in_config
-
+import logging
 logger = logging.getLogger(__name__)
 
 
@@ -51,7 +51,14 @@ class Engine:
             A=self.loss_lambda.get_float('A'),
             M=self.loss_lambda.get_float('M')
         )
-
+        
+        #whc add a logger
+        self.logger=logging.getLogger()
+        self.logger.setLevel(logging.INFO)
+        fh=logging.FileHandler("test_log/torch_res.log",mode="w")
+        fh.setLevel(logging.INFO)
+        self.logger.addHandler(fh)
+        
         self.train_loader = self.data_loader_factory.build(vid=True, device=self.device)
 
         self.learning_rate = self.cfg.get_float('optimizer.lr')
@@ -173,7 +180,9 @@ class Engine:
             batch_size = len(clip_q)
             self.top1_meter_A_n.update(acc1_A_n, batch_size)
             self.top5_meter_A_n.update(acc5_A_n, batch_size)
-
+            
+            #whc
+            self.logger.info("whc {} {} {} {} {} {} {} {}".format(self.current_epoch,i,loss.detach().numpy()[0], loss_A.detach().numpy()[0], loss_M.detach().numpy()[0],acc1_A.detach().numpy()[0], acc5_A.detach().numpy()[0], acc1_M.detach().numpy()[0]))
             if i > 0 and i % self.log_interval == 0:
                 # Do logging as late as possible. this will force CUDA sync.
                 # Log numbers from last iteration, just before update

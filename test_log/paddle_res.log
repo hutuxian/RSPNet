@@ -1,0 +1,13 @@
+Using global get_model_class(s3dg)
+Using MultiTask Wrapper
+Found fc: fc with in_features: 1024
+Using MultiTask Wrapper
+Found fc: fc with in_features: 1024
+Building Dataset: VID: True, Split=train
+Training s3dg with size: 224
+Using frames: 32, with strides: [ConfigTree([('stride', 1), ('weight', 1)])]
+train split: 100 classes, 31956 videos. 0 videos blacklisted
+You are using VideoDataset: <class 'datasets.classification.video.VideoDataset'>
+adjust lr according to the number of GPU and batch size：0.05 -> 0.2
+whc 0 0 3.881038188934326 3.41707706451416 2.319805860519409 0.90625 0.9375 0.53125 2021-03-10 11:08:57.436026
+whc 0 1 23.570568084716797 23.039051055908203 2.657588005065918 0.0 0.0 0.375 2021-03-10 11:09:22.652919

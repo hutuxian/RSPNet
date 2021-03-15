@@ -126,6 +126,7 @@ class DataLoaderFactoryV3:
             spatial_transform=cpu_transform,
             num_clips_per_sample=2 if vid else 1,
             frame_rate=self.cfg.get_float('temporal_transforms.frame_rate'),
+            device=device
         )
 
         if split == 'train':
@@ -134,8 +135,9 @@ class DataLoaderFactoryV3:
             batch_size = self.cfg.get_int('final_validate.batch_size')
         else:
             batch_size = self.cfg.get_int('validate.batch_size')
-
-        sampler = DistributedBatchSampler(ds, batch_size, shuffle=(split == 'train'), drop_last=True)
+        
+        
+        sampler = DistributedBatchSampler(ds, 2, shuffle=(split == 'train'), drop_last=True)
 
         dl = DataLoader(
             video_dataset,
@@ -143,12 +145,18 @@ class DataLoaderFactoryV3:
             num_workers=self.cfg.get_int('num_workers'),
             #num_workers=0,
             batch_sampler=sampler,
-            use_shared_memory =False,
-            #drop_last=(split == 'train'),
+            # drop_last=(split == 'train'),
             #collate_fn=identity,  # We will deal with collation on main thread.
             collate_fn=gpu_collate_fn,  # We will deal with collation on main thread.
             # multiprocessing_context=mp.get_context('fork'),
         )
+        print("==============test===========")
+        try:
+            for c in dl():
+                print("VVVVV")
+        except Exception as e:
+            print("=========error==========",e)
+        
         # return MainProcessCollateWrapper(dl, gpu_collate_fn)
         return dl
 

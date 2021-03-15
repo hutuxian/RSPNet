@@ -6,10 +6,9 @@ Commit id: 4e2195c
 import math
 from functools import partial
 
-import paddle
-import paddle.nn as nn
-import paddle.nn.functional as F
-import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 __all__ = [
     'ResNet', 'resnet10', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
@@ -19,43 +18,43 @@ __all__ = [
 
 def conv3x3x3(in_planes, out_planes, stride=1):
     # 3x3x3 convolution with padding
-    return nn.Conv3D(
+    return nn.Conv3d(
         in_planes,
         out_planes,
         kernel_size=3,
         stride=stride,
         padding=1,
-        bias_attr=False)
+        bias=False)
 
 
 def downsample_basic_block(x, planes, stride):
-    out = F.avg_pool3D(x, kernel_size=1, stride=stride)
-    # zero_pads = paddle.Tensor(
+    out = F.avg_pool3d(x, kernel_size=1, stride=stride)
+    # zero_pads = torch.Tensor(
     #     out.size(0), planes - out.size(1), out.size(2), out.size(3),
     #     out.size(4)).zero_()
-    # if isinstance(out.data, paddle.cuda.FloatTensor):
+    # if isinstance(out.data, torch.cuda.FloatTensor):
     #     zero_pads = zero_pads.cuda()
-    zero_pads = paddle.zeros(
+    zero_pads = torch.zeros(
         out.shape[0], planes - out.shape[1], out.shape[2], out.shape[3],
         device=x.device
     )
 
-    # out = Variable(paddle.cat([out.data, zero_pads], dim=1))
-    out = paddle.cat([out.data, zero_pads], dim=1)
+    # out = Variable(torch.cat([out.data, zero_pads], dim=1))
+    out = torch.cat([out.data, zero_pads], dim=1)
 
     return out
 
 
-class BasicBlock(nn.Layer):
+class BasicBlock(nn.Module):
     expansion = 1
 
     def __init__(self, inplanes, planes, stride=1, downsample=None):
         super(BasicBlock, self).__init__()
         self.conv1 = conv3x3x3(inplanes, planes, stride)
-        self.bn1 = nn.BatchNorm3D(planes)
-        self.relu = nn.ReLU()
+        self.bn1 = nn.BatchNorm3d(planes)
+        self.relu = nn.ReLU(inplace=True)
         self.conv2 = conv3x3x3(planes, planes)
-        self.bn2 = nn.BatchNorm3D(planes)
+        self.bn2 = nn.BatchNorm3d(planes)
         self.downsample = downsample
         self.stride = stride
 
@@ -78,19 +77,19 @@ class BasicBlock(nn.Layer):
         return out
 
 
-class Bottleneck(nn.Layer):
+class Bottleneck(nn.Module):
     expansion = 4
 
     def __init__(self, inplanes, planes, stride=1, downsample=None):
         super(Bottleneck, self).__init__()
-        self.conv1 = nn.Conv3D(inplanes, planes, kernel_size=1, bias_attr=False)
-        self.bn1 = nn.BatchNorm3D(planes)
-        self.conv2 = nn.Conv3D(
-            planes, planes, kernel_size=3, stride=stride, padding=1, bias_attr=False)
-        self.bn2 = nn.BatchNorm3D(planes)
-        self.conv3 = nn.Conv3D(planes, planes * 4, kernel_size=1, bias_attr=False)
-        self.bn3 = nn.BatchNorm3D(planes * 4)
-        self.relu = nn.ReLU()
+        self.conv1 = nn.Conv3d(inplanes, planes, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm3d(planes)
+        self.conv2 = nn.Conv3d(
+            planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm3d(planes)
+        self.conv3 = nn.Conv3d(planes, planes * 4, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm3d(planes * 4)
+        self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
 
@@ -117,7 +116,7 @@ class Bottleneck(nn.Layer):
         return out
 
 
-class ResNet(nn.Layer):
+class ResNet(nn.Module):
 
     def __init__(self,
                  block,
@@ -128,16 +127,16 @@ class ResNet(nn.Layer):
                  num_classes=400):
         self.inplanes = 64
         super(ResNet, self).__init__()
-        self.conv1 = nn.Conv3D(
+        self.conv1 = nn.Conv3d(
             3,
             64,
             kernel_size=7,
             stride=(1, 2, 2),
             padding=(3, 3, 3),
-            bias_attr=False)
-        self.bn1 = nn.BatchNorm3D(64)
-        self.relu = nn.ReLU()
-        self.maxpool = nn.MaxPool3D(kernel_size=(3, 3, 3), stride=2, padding=1)
+            bias=False)
+        self.bn1 = nn.BatchNorm3d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool3d(kernel_size=(3, 3, 3), stride=2, padding=1)
         self.layer1 = self._make_layer(block, 64, layers[0], shortcut_type)
         self.layer2 = self._make_layer(
             block, 128, layers[1], shortcut_type, stride=2)
@@ -147,24 +146,16 @@ class ResNet(nn.Layer):
             block, 512, layers[3], shortcut_type, stride=2)
         last_duration = int(math.ceil(sample_duration / 16))
         last_size = int(math.ceil(sample_size / 32))
-        self.avgpool = nn.AvgPool3D(
+        self.avgpool = nn.AvgPool3d(
             (last_duration, last_size, last_size), stride=1)
         self.fc = nn.Linear(512 * block.expansion, num_classes)
-        # self.fc = nn.Linear(512 * 4, num_classes)
 
-        # for m in self.modules():
-        # for m in self.sublayers():
-        #     if isinstance(m, nn.Conv3D):
-        #         pass
-        #         # m.weight = nn.init.kaiming_normal_(m.weight, mode='fan_out')
-        #         # print("m.weight", m.weight)
-        #     elif isinstance(m, nn.BatchNorm3D):
-        #         print("type(m.weight)", type(m.weight))
-        #         print("before m.weight", m.weight)
-        #         # m.weight.data.fill_(1)
-        #         # m.bias.data.zero_()
-        #         m.weight = paddle.zeros_like(m.weight)
-        #         print("after m.weight", m.weight)
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                m.weight = nn.init.kaiming_normal_(m.weight, mode='fan_out')
+            elif isinstance(m, nn.BatchNorm3d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
 
     def _make_layer(self, block, planes, blocks, shortcut_type, stride=1):
         downsample = None
@@ -176,12 +167,12 @@ class ResNet(nn.Layer):
                     stride=stride)
             else:
                 downsample = nn.Sequential(
-                    nn.Conv3D(
+                    nn.Conv3d(
                         self.inplanes,
                         planes * block.expansion,
                         kernel_size=1,
                         stride=stride,
-                        bias_attr=False), nn.BatchNorm3D(planes * block.expansion))
+                        bias=False), nn.BatchNorm3d(planes * block.expansion))
 
         layers = []
         layers.append(block(self.inplanes, planes, stride, downsample))
@@ -196,16 +187,17 @@ class ResNet(nn.Layer):
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
-        
+
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
 
         x = self.avgpool(x)
-        x = paddle.reshape(x, shape=[paddle.shape(x)[0], -1])
+
+        x = x.view(x.size(0), -1)
         x = self.fc(x)
-        
+
         return x
 
     def get_feature(self, x):
@@ -225,7 +217,7 @@ class ResNet(nn.Layer):
 
         x = self.avgpool(feat)
 
-        x = paddle.reshape(x, shape=[paddle.shape(x)[0], -1])
+        x = x.view(x.size(0), -1)
         x = self.fc(x)
 
         return x, feat
@@ -302,8 +294,8 @@ def resnet200(**kwargs):
 
 
 if __name__ == '__main__':
-    x = paddle.randn([2, 3, 16, 112, 112])
+    x = torch.rand(2, 3, 16, 112, 112)
     m = resnet18()
-    # print(m)
+    print(m)
     y = m(x)
-    # print(y.shape)
+    print(y.shape)

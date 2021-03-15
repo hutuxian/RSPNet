@@ -19,5 +19,5 @@ default {
         batch_size: 16 * batch_size_factor,
     },
     optimizer+: {lr: 0.1},
-    num_epochs: 30,
+    num_epochs: 2,
 }

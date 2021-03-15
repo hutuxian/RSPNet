@@ -4,15 +4,16 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 import decord
 import numpy as np
-import torch
+#import torch
 from datasets.transforms_video.transforms_temporal import Resample
 # from torch.utils.data import Dataset
+import paddle
 from paddle.io import Dataset
 
 logger = logging.getLogger(__name__)
 
-decord.bridge.set_bridge('torch')
-logger.info('Decord use torch bridge')
+#decord.bridge.set_bridge('torch')
+#logger.info('Decord use torch bridge')
 
 
 @dataclass
@@ -36,7 +37,8 @@ class VideoDataset(Dataset):
             video_width=-1,
             video_height=-1,
             num_clips_per_sample=1,
-            frame_rate=None
+            frame_rate=None,
+            device=None
     ):
         """
         For VID task: num_clips_per_sample = 2
@@ -50,20 +52,17 @@ class VideoDataset(Dataset):
         self.spatial_transform = spatial_transform
         self.frame_rate = frame_rate
         self.resample_fps = Resample(target_fps=frame_rate)
-
+ 
         logger.info(f'You are using VideoDataset: {self.__class__}')
 
-    def __getitem__(self, index: int) -> Tuple[List[torch.Tensor], int]:
+    def __getitem__(self, index: int) -> Tuple[List[paddle.Tensor], int]:
         sample: Sample = self.samples[index]
-        try:
-            vr = decord.VideoReader(
-                str(sample.video_path),
-                width=self.video_width,
-                height=self.video_height,
-                num_threads=1,
-            )
-        except Exception as e:
-            print("============AAAAAAAAA=======",e)
+        vr = decord.VideoReader(
+            str(sample.video_path),
+            width=self.video_width,
+            height=self.video_height,
+            num_threads=1,
+        )
 
         num_frames = len(vr)
         if num_frames == 0:
@@ -76,16 +75,12 @@ class VideoDataset(Dataset):
         clip_frame_indices_list = [self.temporal_transform(frame_indices) for _ in range(self.num_clips_per_sample)]
         # Fetch all frames in one `vr.get_batch` call
         clip_frame_indices = np.concatenate(clip_frame_indices_list)  # [a1, a2, ..., an, b1, b2, ...,bn]
-        decord.bridge.set_bridge('torch')
-        try:
-            clips: torch.Tensor = vr.get_batch(clip_frame_indices)  # [N*T, H, W, C]
-            clip_list = clips.chunk(len(clip_frame_indices_list), dim=0)  # List[Tensor[T, H, W, C]]
-        except Exception as e:
-            print("===============BBBBBBBb===========",e)
-        try:
-            clip_list = [self.spatial_transform(clip) for clip in clip_list]
-        except Exception as e:
-            print("==============CCCCCCCC============",e)
+        clips = vr.get_batch(clip_frame_indices)  # [N*T, H, W, C]
+        paddle.set_device('cpu')
+        clips = paddle.to_tensor(clips.asnumpy(),dtype="float32")
+        clip_list = paddle.chunk(clips,len(clip_frame_indices_list), axis=0)  # List[Tensor[T, H, W, C]]    
+        clip_list = [self.spatial_transform(clip) for clip in clip_list]
+        print("==============VVVVVVVVVVV=============>",len(clip_list))
         return clip_list, sample.class_index
 
     def __len__(self):
