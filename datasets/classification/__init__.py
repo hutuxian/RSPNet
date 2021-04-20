@@ -141,7 +141,7 @@ class DataLoaderFactoryV3:
             video_dataset,
             #batch_size=batch_size,
             #num_workers=self.cfg.get_int('num_workers'),
-            num_workers=0,
+            num_workers=self.cfg.get_int('num_workers'),
             batch_sampler=sampler,
             # drop_last=(split == 'train'),
             #collate_fn=identity,  # We will deal with collation on main thread.
