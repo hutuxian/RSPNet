@@ -189,15 +189,15 @@ class MoCoDiffLossTwoFc(nn.Layer):
     @paddle.no_grad()
     def _forward_encoder_k(self, im_k):
         # shuffle for making use of BN
-        #im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
+        im_k, idx_unshuffle = self._batch_shuffle_ddp(im_k)
 
         k_A, k_M = self.encoder_k(im_k)  # keys: NxC
         # k_A = self.encoder_q(im_k)
         # k_M = self.encoder_q(im_k)
 
         # undo shuffle
-        #k_A = self._batch_unshuffle_ddp(k_A, idx_unshuffle)
-        #k_M = self._batch_unshuffle_ddp(k_M, idx_unshuffle)
+        k_A = self._batch_unshuffle_ddp(k_A, idx_unshuffle)
+        k_M = self._batch_unshuffle_ddp(k_M, idx_unshuffle)
 
         return k_A, k_M
 
